@@ -63,6 +63,11 @@ export interface Params {
   tpBps: number;
   /** Exit when it is worth this much under its cost (bps). */
   slBps: number;
+  /** First take-profit: sell tp1PartBps of the position once it is worth tp1Bps over its cost. */
+  tp1Bps: number;
+  tp1PartBps: number;
+  /** After the first take-profit, the rest also exits in full at this much over its cost (bps). */
+  tp2Bps: number;
   /** Trailing stop: once up at least trailArmBps, exit on a fall of trailBps from the best value. */
   trailArmBps: number;
   trailBps: number;
@@ -77,10 +82,10 @@ export interface Params {
 export const DEFAULT_PARAMS: Params = {
   minAge: 0,
   maxAge: 40,
-  stakeLamports: 100_000_000,
-  addLamports: 100_000_000,
-  maxAdds: 2,
-  addStepBps: 500,
+  stakeLamports: 500_000_000,
+  addLamports: 500_000_000,
+  maxAdds: 6,
+  addStepBps: 50,
   addDelay: 2,
   addMinFlowLamports: 0,
   minRealSol: 4_500_000_000,
@@ -95,8 +100,12 @@ export const DEFAULT_PARAMS: Params = {
   minRecentBuyers: 0,
   skipDevSold: true,
   buySlippageBps: 10_000,
-  tpBps: 3000,
-  slBps: 2000,
+  tpBps: 2250,
+  slBps: 1500,
+  tp1Bps: 1_000_000,
+  tp1PartBps: 5000,
+  slAfterTp1Bps: 0,
+  tp2Bps: 1_000_000,
   trailArmBps: 1500,
   trailBps: 300,
   maxHold: 45,
@@ -139,6 +148,7 @@ interface Held {
   openedSlot: number;
   txPaid: bigint;
   best: bigint;
+  tookTp1: boolean;
 }
 
 export interface Strategy {
@@ -253,7 +263,7 @@ export function createStrategy(params: Params = DEFAULT_PARAMS): Strategy {
         const h = held.get(f.mint);
         if (f.status !== 'rejected' && h !== undefined) h.txPaid += BigInt(f.tx_fee_lamports);
         if (f.side === 'buy' && f.status === 'filled' && h === undefined) {
-          held.set(f.mint, { openedSlot: f.slot, txPaid: BigInt(f.tx_fee_lamports), best: 0n });
+          held.set(f.mint, { openedSlot: f.slot, txPaid: BigInt(f.tx_fee_lamports), best: 0n, tookTp1: false });
         }
       }
       for (const mint of [...selling]) if (!hasPendingSell(state, mint)) selling.delete(mint);
@@ -268,7 +278,7 @@ export function createStrategy(params: Params = DEFAULT_PARAMS): Strategy {
         const c = coins.get(mint);
         let h = held.get(mint);
         if (h === undefined) {
-          h = { openedSlot: state.slot, txPaid: tx, best: 0n };
+          h = { openedSlot: state.slot, txPaid: tx, best: 0n, tookTp1: false };
           held.set(mint, h);
         }
         let mk = marks.get(mint);
@@ -282,8 +292,22 @@ export function createStrategy(params: Params = DEFAULT_PARAMS): Strategy {
         if (value > h.best) h.best = value;
         let exit = false;
         if (basis > 0n) {
-          if (value * BPS >= basis * (BPS + BigInt(P.tpBps))) exit = true;
-          if (value * BPS <= basis * (BPS - BigInt(P.slBps))) exit = true;
+          // Partial take-profit: bank half at tp1, let the rest ride with a
+          // breakeven-or-better stop and the trailing stop.
+          if (!h.tookTp1 && value * BPS >= basis * (BPS + BigInt(P.tp1Bps))) {
+            const part = (pos.token_amount * BigInt(P.tp1PartBps)) / BPS;
+            if (part > 0n && part < pos.token_amount) {
+              orders.push({ side: 'sell', mint, token_amount: part, max_slippage_bps: 10_000 });
+              selling.add(mint);
+              h.tookTp1 = true;
+              h.best = 0n;
+              continue;
+            }
+          }
+          if (!h.tookTp1 && value * BPS >= basis * (BPS + BigInt(P.tpBps))) exit = true;
+          if (h.tookTp1 && value * BPS >= basis * (BPS + BigInt(P.tp2Bps))) exit = true;
+          const sl = h.tookTp1 ? BigInt(P.slAfterTp1Bps) : BigInt(P.slBps);
+          if (value * BPS <= basis * (BPS - sl)) exit = true;
           if (h.best * BPS >= basis * (BPS + BigInt(P.trailArmBps)) && value * BPS <= h.best * (BPS - BigInt(P.trailBps))) exit = true;
         }
         if (state.slot - h.openedSlot >= P.maxHold) exit = true;

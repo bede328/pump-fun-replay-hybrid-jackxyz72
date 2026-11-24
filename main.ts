@@ -3,6 +3,13 @@
 // protocol in the vendored SDK shim (vendor/agentfun-bot.ts, a byte-identical copy of
 // the kit's sdk/ts/makefun-bot.ts).
 
+// The entrypoint itself holds no trading logic on purpose: every decision lives
+// in strategy.ts, so the file the grader runs is a thin shell around a pure
+// function of the batch stream. Keeping the shell thin means the same strategy
+// can be graded, swept, and replayed without touching the wiring.
+// Diagnostics go to stderr, never stdout, because stdout is the reply channel
+// the harness listens on; anything else printed there would look like an order.
+
 import { runBot } from './vendor/agentfun-bot.ts';
 import { createStrategy, DEFAULT_PARAMS } from './strategy.ts';
 

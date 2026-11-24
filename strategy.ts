@@ -20,6 +20,40 @@
 // that arms at trailArmBps and trails trailBps off the best marked value, a hard maxHold
 // in slots, and an immediate exit when the creator sells while we hold. A pure function
 // of the batches it is fed: no clock, no randomness, no I/O.
+//
+// Design notes — why this hybrid is shaped the way it is.
+//
+// A launch with a single outside buyer is usually just the creator's echo,
+// and a launch already crowded with buyers has handed its first leg to the crowd.
+// Two buyers is the narrow middle where somebody else has shown up but the
+// move is still early enough to join.
+//
+// The reserve floor keeps the bot out of curves so thin that its own order
+// would become the market; a few SOL of real reserves means the price the bot
+// sees is a price other people already agreed to.
+//
+// The strength check is deliberately light: demanding a large run-up before
+// the first buy would mean buying the top of the leg that just happened.
+// A small rise, or flow that is still coming in, is enough to separate a
+// tape that is alive from one that has already gone quiet.
+//
+// Adds only ever follow strength, never weakness. Buying more of a position
+// that is falling doubles the loss on the way down, while buying more of a
+// position that is climbing lets the winner do the carrying. The add step
+// exists so the bot cannot pile in at the same price twice in a row.
+//
+// Every exit is decided in advance, because the window rewards leaving with
+// the first leg rather than waiting to see whether a second one arrives.
+// The trailing stop is there for the rare coin that keeps running, and the
+// hard hold cap is there for the common coin that drifts sideways until the
+// window ends.
+//
+// There is no second entry into a coin that already traded. A launch that
+// already gave its move rarely gives another one before the replay ends,
+// and chasing it again only pays the curve fee a second time.
+//
+// Nothing here reads the clock, rolls dice, or reaches outside the batches
+// it is handed, so feeding the same replay twice produces the same orders twice.
 
 import { BPS, type BotState, type Batch, type OrderInput, type Pubkey } from './vendor/agentfun-bot.ts';
 
